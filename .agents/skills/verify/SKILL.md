@@ -23,7 +23,7 @@ description: 验证本项目的实现和验证流程变更，按 diff 选择单�
 ```js
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { inRange } from './durable_mvp/calendar.mjs';
+import { inRange } from './durable_mvp/calendar.ts';
 
 const start = '2030-06-15T15:00:00+08:00';
 const end = '2030-06-15T16:00:00+08:00';
