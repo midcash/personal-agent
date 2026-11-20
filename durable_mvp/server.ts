@@ -3,31 +3,27 @@ import path from 'node:path';
 import net from 'node:net';
 import {DatabaseSync} from 'node:sqlite';
 import {syncBuiltinESMExports} from 'node:module';
-import {parseArgs} from 'node:util';
 import {BACKGROUND_CONTEXT as ctx} from '@earendil-works/chord/context';
 import {openNodeSqliteStorage} from '@earendil-works/pi-durable/storage/sqlite/node';
 import {Harness, createRegistry} from '@earendil-works/pi-durable';
 import {createAgentExtension, instructions} from './agent.ts';
 import {configureModels} from './models.ts';
 import {setNowProvider} from './calendar-time.ts';
+import {loadEnv, parseHostOptions} from './env.ts';
 import {createHttpServer} from './http.ts';
 
-const {values: options} = parseArgs({options: {
-  mode: {type: 'string', default: 'offline'}, data: {type: 'string'},
-  port: {type: 'string', default: '8765'}, 'now-file': {type: 'string'},
-}});
-if (options.mode !== 'offline' && options.mode !== 'deepseek') throw new Error('mode must be offline or deepseek');
+const options = parseHostOptions();
 // Test-only: pin "now" from a file (or literal ISO string). Production never passes this flag.
-if (options['now-file'] !== undefined) {
-  const source = fs.existsSync(options['now-file']) ? fs.readFileSync(options['now-file'], 'utf8').trim() : options['now-file'];
+if (options.nowFile !== undefined) {
+  const source = fs.existsSync(options.nowFile) ? fs.readFileSync(options.nowFile, 'utf8').trim() : options.nowFile;
   const fixed = Date.parse(source);
   if (!/(?:Z|[+-]\d{2}:\d{2})$/.test(source) || !Number.isFinite(fixed))
     throw new Error('Invalid --now-file: expected an ISO timestamp with Z or an explicit offset');
   setNowProvider(() => fixed);
 }
-const port = Number(options.port);
-if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid port');
+const port = options.port;
 const offline = options.mode === 'offline';
+if (!offline) loadEnv();
 if (!offline && !process.env.DEEPSEEK_API_KEY) throw new Error('Missing DEEPSEEK_API_KEY');
 if (offline) {
   const deny = () => { throw new Error('Offline mode blocks outbound network'); };

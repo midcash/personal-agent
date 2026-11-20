@@ -1,36 +1,32 @@
-# Pi Durable 能力实验室
+# Personal Agent（Pi Durable MVP）
 
-本轮核心是独立的 Pi Durable MVP：在本机浏览器验证对话、工具调用、持久化笔记、取消、后台计时与服务重启后的继续执行。默认使用明确标注的离线合成模型，不查询差旅供应商，不连接 MCP。真实 DeepSeek 由 **pi-ai provider** 接入，再交给 Pi Durable，Pi Durable 是唯一维护的 Agent 运行路径。
+本轮核心是独立的 Pi Durable MVP：在本机浏览器验证对话、工具调用、持久化笔记、取消、后台计时与服务重启后的继续执行。默认使用明确标注的离线合成模型，不连接 MCP。真实 DeepSeek 由 **pi-ai provider** 接入，再交给 Pi Durable，Pi Durable 是唯一维护的 Agent 运行路径。
 
-产品方向为个人日程 Agent 助手，差旅作为保留的子能力。支持会话读取、新增、修改、删除和改期日程及 FullCalendar 视图；确认目标见 `docs/product-behavior.md` 的 S01–S05。
+产品朝 Personal Agent 方向演进，当前聚焦个人日程读取、新增、修改、删除、改期及 FullCalendar 视图；已确认目标见 `docs/product-behavior.md` 的 S01–S05。差旅子能力与 Python 启动壳已按 [ADR 003](docs/adr/003-retire-travel-and-unify-node.md) 正式退役。
 
-这是能力 MVP，不代表完整产品或真实模型端到端验收通过。[CONTEXT.md](CONTEXT.md) 定义业务术语，[docs/product-behavior.md](docs/product-behavior.md) 定义日程与差旅子能力的已确认目标。
+这是能力 MVP，不代表完整产品或真实模型端到端验收通过。[CONTEXT.md](CONTEXT.md) 定义业务术语，[docs/product-behavior.md](docs/product-behavior.md) 定义已确认的日程验收目标。
 
 ## 安装与启动
 
-需要 Python 3.11+、Node 22.19+ 和 npm。仅支持从完整仓库源码运行；Python wheel 不包含 Node 应用和依赖。
-
-Python 命令统一在仓库目录下的 `.venv` 中执行，不要用系统 Python 运行项目命令。`.venv` 不随仓库提交，首次检出时用系统 Python 创建一次，之后只使用 `.\.venv\Scripts\python.exe`；Windows PowerShell 也可先运行 `.venv\Scripts\Activate.ps1` 再用 `python`。CI 使用自己创建的环境，不依赖本机 `.venv`。
+需要 Node 22.19+ 和 npm。仅支持从完整仓库源码运行。
 
 ```powershell
-python -m venv .venv   # 仅首次：用系统 Python 创建仓库虚拟环境
-.\.venv\Scripts\python.exe -m pip install -e .
-npm.cmd ci --prefix durable_mvp --ignore-scripts --no-audit --no-fund
-npm.cmd --prefix durable_mvp run build
-.\.venv\Scripts\python.exe -B -X utf8 -m travel_agent
+npm.cmd ci --ignore-scripts --no-audit --no-fund
+npm.cmd run build
+npm.cmd start
 ```
 
-打开 [能力实验室](http://127.0.0.1:8765)。输入普通消息观察离线回显；`/note 一条笔记` 保存笔记，`/slow 一段内容` 执行十秒工具，`/fail` 演示工具失败。页面可创建十秒后台计时。刷新不会提交新消息；关闭服务后用相同命令重启，会话、笔记和后台任务继续保留。停止服务请在运行命令的终端按 Ctrl+C，启动器和 Node 宿主会一起退出；强制结束 Python 启动器可能留下仍在运行的 Node 宿主，此时再次启动会报 `Store is already in use`，结束占用该端口的 `node` 进程后即可重启。
+打开 [能力实验室](http://127.0.0.1:8765)。输入普通消息观察离线回显；`/note 一条笔记` 保存笔记，`/slow 一段内容` 执行十秒工具，`/fail` 演示工具失败。页面可创建十秒后台计时。刷新不会提交新消息；关闭服务后用相同命令重启，会话、笔记和后台任务继续保留。停止服务请在运行命令的终端按 Ctrl+C；若启动时报错 `Store is already in use`，说明仍有其他存活的 `node` 进程占用该数据目录，结束对应进程后即可重启。
 
-默认数据位于新的 `.durable-mvp/offline/`，不读取或迁移旧数据库。可指定独立的新目录和端口：
+默认数据位于新的 `.durable-mvp/offline/`，不读取或迁移旧数据库。可直接运行服务端指定独立的新目录和端口：
 
 ```powershell
-.\.venv\Scripts\python.exe -B -X utf8 -m travel_agent --data C:/path/to/new-mvp-store --port 8765
+node durable_mvp/server.ts --data C:/path/to/new-mvp-store --port 8765
 ```
 
 ### 日历视图与工具
 
-项目统一采用固定 UTC+8（IANA `Etc/GMT-8`，+08:00，不随夏令时变化）：页面显示时区、日历工具默认时区、模型提示与离线示例一致，差旅侧的时间解析同样按 +08:00。页面使用本地安装的 FullCalendar 6.1.20（MIT），支持月、周、日视图；显式加载中文语言包。点击事件查看完整起止时间。四个原生工具为 `list_calendar_events`、`create_calendar_event`、`update_calendar_event` 和 `delete_calendar_event`，与页面 HTTP 查询共用 Durable 文档及 `session.sqlite`，不另建数据库、不迁移旧数据。
+项目统一采用固定 UTC+8（IANA `Etc/GMT-8`，+08:00，不随夏令时变化）：页面显示时区、日历工具默认时区、模型提示与离线示例一致。页面使用本地安装的 FullCalendar 6.1.20（MIT），支持月、周、日视图；显式加载中文语言包。点击事件查看完整起止时间。五个原生工具为 `get_current_time`、`list_calendar_events`、`create_calendar_event`、`update_calendar_event` 和 `delete_calendar_event`，与页面 HTTP 查询共用 Durable 文档及 `session.sqlite`，不另建数据库、不迁移旧数据。
 
 离线模式示例（仅合成模型指令，不代表自然语言理解）：
 
@@ -50,22 +46,28 @@ npm.cmd --prefix durable_mvp run build
 在本地 `.env` 或环境变量配置 `DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL` 和可选的 `DEEPSEEK_BASE_URL`：
 
 ```powershell
-.\.venv\Scripts\python.exe -B -X utf8 -m travel_agent --mode deepseek
+node durable_mvp/server.ts --mode deepseek
 ```
 
-仅真实模式由 Python 启动器加载 `.env`；离线模式不加载。真实模式用自然语言要求保存笔记等。锁定版 pi-ai 默认模型为 `deepseek-flash`，还支持其目录中的 `deepseek-v4-pro`。旧配置若为 `deepseek-v4-flash`，需由用户更新；启动错误会列出支持的模型，不自动猜别名或价格。自定义地址仍由 pi-ai 传输和认证。真实模式使用单独的新目录 `.durable-mvp/deepseek/`。
+仅真实模式由 [环境加载器](durable_mvp/env.ts) 加载 `.env`；离线模式不加载。真实模式用自然语言要求保存笔记、安排日程等。锁定版 pi-ai 默认模型为 `deepseek-flash`，还支持其目录中的 `deepseek-v4-pro`。旧配置若为 `deepseek-v4-flash`，需由用户更新；启动错误会列出支持的模型，不自动猜别名或价格。自定义地址仍由 pi-ai 传输和认证。真实模式使用单独的新目录 `.durable-mvp/deepseek/`。
 
-重启会自动恢复未完成任务，模型请求可能重新发出并产生费用。页面调用数只统计本进程，不是跨重启账单。本轮未执行真实模型调用。
+重启会自动恢复未完成任务，模型请求可能重新发出并产生费用。页面调用数只统计本进程，不是跨重启账单。本机若需复跑有界真实模型验证（仅在新建临时 `--data` 目录运行，不触碰 `.durable-mvp/deepseek/`），可执行：
+
+```powershell
+npm.cmd run check:real
+```
+
+详细浏览器验收流程见 [真实模型浏览器验收](verification/durable-mvp/README.md#真实模型浏览器验收)。
 
 ## 源码与能力边界
 
-- [宿主入口](durable_mvp/server.ts) 组装 Pi Durable、SQLite 和服务生命周期，[HTTP](durable_mvp/http.ts) 提供静态资源和应用接口。
+- [宿主入口](durable_mvp/server.ts) 组装 Pi Durable、SQLite 和服务生命周期，[HTTP](durable_mvp/http.ts) 提供静态资源和应用接口，[环境加载](durable_mvp/env.ts) 负责白名单 `.env` 读取。
 - [Agent](durable_mvp/agent.ts) 定义提示、工具和后台任务，[模型](durable_mvp/models.ts) 选择真实或离线模型，[文档](durable_mvp/documents.ts) 定义持久化记录。
 - [日历](durable_mvp/calendar.ts) 实现查询、变更、重叠确认和事务去重，[时间](durable_mvp/calendar-time.ts) 负责时区、时钟和相对日期解析。
-- [页面](durable_mvp/index.html)、[交互](durable_mvp/web/app.ts)、[样式](durable_mvp/style.css) 源码位于同一目录。Node 22 直接运行服务端 TypeScript，浏览器使用 npm 构建出的原生 ES 模块。修改浏览器代码后重新运行构建命令。
-- [启动入口](travel_agent/__main__.py)。
+- [页面](durable_mvp/index.html)、[交互](durable_mvp/web/app.ts)、[样式](durable_mvp/style.css) 源码位于同一目录。Node 22 直接运行服务端 TypeScript，浏览器使用 npm 构建出的原生 ES 模块。修改浏览器代码后重新运行 `npm.cmd run build`。
+- [检查脚本](scripts/check.ts) 运行文档引用校验、TypeScript 类型检查/构建与全部 `node --test` 用例；[真实模型检查](verification/durable-mvp/real-model.check.ts) 提供按需触发的有界 DeepSeek S01/S04/S05 验收入口。
 - [本轮验收](verification/durable-mvp/README.md)：运行方式、断言和浏览器观察。
-- [底层 Durable 探针](verification/durable-step0/README.md)：原子性、存储失败和已提交状态等已有验证。
+- [底层 Durable 探针](verification/durable-step0/README.md)：原子性、存储失败和已提交状态等历史隔离验证（需 Python 3.11+ 按其 README 单独运行）。
 
 模块划分参考 [OpenAI Agents SDK for TypeScript](https://github.com/openai/openai-agents-js/blob/main/CONTRIBUTING.md) 的运行时与模型适配边界，以及 [Mastra](https://github.com/mastra-ai/mastra/tree/main/packages/core/src) 的 Agent、工具与持久化职责划分。运行时仍由 Pi Durable 提供。
 
@@ -73,23 +75,22 @@ Pi Durable、pi-ai 和 chord 精确锁定 1.4.0；Durable 是实验性 API。只
 
 `save_note` 通过框架事务同时写笔记和变更记录，用工具 call ID 防止恢复时重复写入。`slow_echo` 声明可安全重放，强杀后可能重新执行。取消本轮中止普通工具，保留后台计时。停机期间计时任务不会执行，重启后补做已到期任务。安全重放不等于任意外部副作用恰好一次；未来 MCP 工具需要逐个决定重放策略。
 
-不包含多用户、生产级运行预算、备份、数据库迁移、MCP、真实差旅查询和完整 B01–B12 验收。恢复能力只为 B08 提供底层依据，不表示差旅选定项及方案已验收。
+不包含多用户、生产级运行预算、备份、数据库迁移或 MCP。
 
 ## 默认离线检查
 
-安装 MVP 依赖后，完整检查还需安装 Durable 探针依赖：
+安装根目录依赖后，运行默认离线检查：
 
 ```powershell
-npm.cmd ci --prefix verification/durable-step0 --ignore-scripts --no-audit --no-fund
-.\.venv\Scripts\python.exe scripts/check.py
+npm.cmd run check
 ```
 
-激活虚拟环境后等价于 `python scripts/check.py`。Windows 需允许探针强杀自己启动的 Node 子进程。检查不加载 `.env`，不产生模型或供应商费用。CI 在 PR 和 main 推送时运行，已增加 MVP 依赖安装；远端结果另行核实。
+检查不加载 `.env`，不产生模型费用。CI 在 PR 和 main 推送时运行；远端结果另行核实。
 
-## 保留的业务资产与数据
+## 历史决策记录
 
-差旅子能力的 [RealTools](travel_agent/real_tools.py)、交通/住宿/地点/路线供应商适配、[事实结构](travel_agent/facts.py)、[传输边界](travel_agent/supplier_wire.py) 和 [Trace](travel_agent/telemetry.py) 保留，有独立工具测试，尚未接入 Durable。Trace 不等于业务会话恢复。
+- [ADR 001](docs/adr/001-retire-coding-agent.md)：退役 `pi-coding-agent`，确立 Pi Durable 为唯一维护路径。
+- [ADR 002](docs/adr/002-pivot-to-schedule-assistant.md)：转向个人日程助手。
+- [ADR 003](docs/adr/003-retire-travel-and-unify-node.md)：正式放下差旅并统一至纯 Node/TypeScript（清理前差旅源码可在 Git 历史查阅）。
 
-[差旅子能力待接入验收索引](verification/baseline/README.md) 区分底层工具与未验证业务行为。决策记录：[退役 ADR](docs/adr/001-retire-coding-agent.md) 记录历史位置，[ADR 002](docs/adr/002-pivot-to-schedule-assistant.md) 记录转向个人日程助手的决定。
-
-不提交密钥、.env 或本机记录；历史数据库、Trace、experiments 和个人数据不迁移、覆盖或删除。
+不提交密钥、`.env` 或本机记录；历史数据库、experiments 和个人数据不迁移、覆盖或删除。

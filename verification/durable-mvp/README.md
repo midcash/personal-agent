@@ -1,12 +1,12 @@
 # Durable MVP 验收
 
-安装、启动、能力和限制以根 [README](../../README.md) 为准。本入口维护验收方式与本轮观察，不替代差旅 B01–B12。
+安装、启动、能力和限制以根 [README](../../README.md) 为准。本入口维护验收方式与本轮观察。
 
-2026-11-06 起项目默认时区改为固定 UTC+8（见 `docs/product-behavior.md` S01）。下方 2026-11-05 / 11-06 的历史观察段落保留当时的 UTC−8 配置与结果，不作为当前默认时区的证明；当前范围以文末增量为准。历史段落只保留检查结果，不把当时的本机解释器路径当作当前用法；本项目统一使用仓库 `.venv`。
+2026-11-06 起项目默认时区改为固定 UTC+8（见 `docs/product-behavior.md` S01）。下方 2026-11-05 / 11-06 的历史观察段落保留当时的 UTC−8 配置与结果，不作为当前默认时区的证明；当前范围以文末增量为准。历史段落只保留检查结果，不把当时的启动与检查路径当作当前用法；当前统一使用 Node 22.19+ 与根目录 `npm run check`。
 
 ## 可复跑的浏览器验收
 
-按根 [README](../../README.md#安装与启动) 安装依赖。给本轮创建全新临时数据目录，选空闲端口，使用 `--mode offline --data <临时目录> --port <端口>` 启动。在 Ego Lite 打开该端口，确认页面标注为离线模式。以下演练对应 [S04](../../docs/product-behavior.md#s04-重叠先确认)。
+按根 [README](../../README.md#安装与启动) 安装并构建后，给本轮创建全新临时数据目录，选空闲端口，使用 `node durable_mvp/server.ts --mode offline --data <临时目录> --port <端口>` 启动。在 Ego Lite 打开该端口，确认页面标注为离线模式。以下演练对应 [S04](../../docs/product-behavior.md#s04-重叠先确认)。
 
 1. 在消息框发送 `/calendar {"title":"已有日程","start":"2030-06-15T15:00:00+08:00","end":"2030-06-15T16:00:00+08:00"}`，等日历显示该日程。若不在当前月，先切换到事件所在月份，也可以把示例日期统一换成当前显示月内的一天。
 2. 发送 `/calendar {"title":"重叠候选","start":"2030-06-15T15:30:00+08:00","end":"2030-06-15T16:30:00+08:00"}`。观察「待确认日程」和「确认创建」，核对 `GET /state` 的 `calendar.events` 只有「已有日程」，并记录「已有日程」的 ID、起止时间。
@@ -15,7 +15,10 @@
 
 ## 真实模型浏览器验收
 
-按根 [README](../../README.md#真实模型主动选择可能产生费用) 配置真实模型。执行前说明模型、场景、预计调用范围和费用，取得用户明确授权后，用 `--mode deepseek --data <全新临时目录> --port <空闲端口>` 启动。用 Ego Lite 确认页面显示真实模式，只发送本轮构造的测试数据。演练结束后停止本轮服务。
+按根 [README](../../README.md#真实模型主动选择可能产生费用) 配置真实模型。触及提示词、模型接入、工具或用户对话路径时，按 `AGENTS.md` 常驻授权使用本机 `.env` 与全新临时 `--data` 目录复跑有界验证（不得触碰用户 `.durable-mvp/deepseek/`；批量或高成本调用仍须先确认）。
+
+- CLI 端到端检查：在仓库根目录运行 `npm.cmd run check:real`（对应 [real-model.check.ts](real-model.check.ts)，自动覆盖下方 S01/S04/S05 自然语言改期链路）。
+- 浏览器实机检查：用 `node durable_mvp/server.ts --mode deepseek --data <全新临时目录> --port <空闲端口>` 启动，在 Ego Lite 确认页面显示真实模式，只发送本轮构造的测试数据，演练结束后停止服务并清理临时目录。
 
 以下是 [S05](../../docs/product-behavior.md#s05-会话修改删除与改期) 的自然语言改期示例。按改动范围选择场景。
 
@@ -34,14 +37,14 @@
 
 ## 离线进程检查
 
-在仓库 `.venv` 中执行（激活后 `python` 等价）：
+在仓库根目录执行：
 
 ```powershell
-.\.venv\Scripts\python.exe -B -X utf8 -m unittest discover -s verification/durable-mvp -v
-.\.venv\Scripts\python.exe scripts/check.py
+npm.cmd test
+npm.cmd run check
 ```
 
-[test_mvp.py](test_mvp.py) 使用真实 HTTP、Node、Pi Durable 和 SQLite。每项新建临时目录，只在自身重启间复用；子进程不继承模型凭证，离线宿主拒绝外连。替身只在 pi-ai 模型边界。
+[mvp.test.ts](mvp.test.ts) 与 [current-time.test.ts](current-time.test.ts) 使用真实 HTTP、Node、Pi Durable 和 SQLite。每项新建临时目录，只在自身重启间复用；子进程不继承模型凭证，离线宿主拒绝外连。替身只在 pi-ai 模型边界。
 
 - 笔记保存后模型/工具精确为 `(2, 1)`，重复请求不新增调用。强杀整个宿主后恢复，消息和笔记相等，新进程为 `(0, 0)`；重试原 ID 仍不新增调用，同 ID 不同正文返回 409。
 - 慢工具开始后强杀，恢复只重放中断工具和后续模型，精确为 `(1, 1)`，用户消息仍只有一条。
