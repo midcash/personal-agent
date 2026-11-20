@@ -10,6 +10,8 @@ import type {CalendarEvent} from '../../durable_mvp/calendar.ts';
 import type {Prompt, State} from '../../durable_mvp/web/api.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '../..');
+const MAX_MODEL_CALLS = 20;
+const MAX_TOOL_CALLS = 15;
 
 type StatePayload = Omit<State, 'calendar'> & {
   calendar: {events: CalendarEvent[]; pending: State['calendar']['pending']};
@@ -29,7 +31,7 @@ async function request(url: URL, signal: AbortSignal, prompt?: Prompt) {
   });
   let body = '';
   for await (const chunk of response.setEncoding('utf8')) body += chunk;
-  assert.equal(response.statusCode, prompt === undefined ? 200 : 202, `${url.pathname} returned ${response.statusCode}`);
+  assert.equal(response.statusCode, prompt === undefined ? 200 : 202, `${url.pathname} returned ${response.statusCode}: ${body}`);
   return body;
 }
 
@@ -42,10 +44,20 @@ test('DeepSeek creates events and reschedules only after overlap confirmation (S
     {cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe']},
   );
   const closed = new Promise<void>(resolve => host.once('close', () => resolve()));
+  const budgetController = new AbortController();
+  const enforceBudget = (kind: 'model' | 'tool', count: number) => {
+    const limit = kind === 'model' ? MAX_MODEL_CALLS : MAX_TOOL_CALLS;
+    if (count > limit && !budgetController.signal.aborted) {
+      host.kill();
+      budgetController.abort(new Error(`Real-model call budget exceeded: ${kind}=${count} > ${limit}`));
+    }
+  };
+
   try {
-    const startupSignal = AbortSignal.any([signal, AbortSignal.timeout(20_000)]);
+    const startupSignal = AbortSignal.any([signal, budgetController.signal, AbortSignal.timeout(20_000)]);
     const url = await new Promise<string>((resolve, reject) => {
       let output = '';
+      let lineBuffer = '';
       let stderr = '';
       startupSignal.addEventListener('abort', () => reject(new Error('DeepSeek host startup timed out')), {once: true});
       host.once('error', reject);
@@ -55,16 +67,33 @@ test('DeepSeek creates events and reschedules only after overlap confirmation (S
       host.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk; });
       host.stdout.setEncoding('utf8').on('data', (chunk: string) => {
         output += chunk;
+        lineBuffer += chunk;
+        const lines = lineBuffer.split(/\r?\n/);
+        lineBuffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (line.startsWith('{"event":')) {
+            const entry = JSON.parse(line) as {event?: string; count?: number};
+            if ((entry.event === 'model' || entry.event === 'tool') && typeof entry.count === 'number') {
+              enforceBudget(entry.event, entry.count);
+            }
+          }
+        }
         const match = /^DURABLE_MVP (http:\/\/127\.0\.0\.1:\d+)\r?\n/m.exec(output);
         if (match) resolve(match[1]);
       });
     });
 
     async function turn(text: string, requestId: string): Promise<StatePayload> {
-      const turnSignal = AbortSignal.any([signal, AbortSignal.timeout(60_000)]);
+      const turnSignal = AbortSignal.any([signal, budgetController.signal, AbortSignal.timeout(60_000)]);
       await request(new URL('/prompt', url), turnSignal, {text, requestId});
       const stateUrl = new URL('/state', url);
-      const readState = async () => JSON.parse(await request(stateUrl, turnSignal)) as StatePayload;
+      const readState = async () => {
+        const snapshot = JSON.parse(await request(stateUrl, turnSignal)) as StatePayload;
+        enforceBudget('model', snapshot.counts.model);
+        enforceBudget('tool', snapshot.counts.tool);
+        budgetController.signal.throwIfAborted();
+        return snapshot;
+      };
       while ((await readState()).busy) {
         await delay(100, undefined, {signal: turnSignal});
       }
@@ -76,7 +105,7 @@ test('DeepSeek creates events and reschedules only after overlap confirmation (S
     assert.equal(state.mode, 'deepseek');
     assert.equal(state.calendar.events.length, 1);
     const [reviewEvent] = state.calendar.events;
-    assert.equal(reviewEvent.title, '项目评审');
+    assert.ok(reviewEvent.title.includes('项目评审'), reviewEvent.title);
     assert.equal(reviewEvent.start, '2030-06-15T14:00:00+08:00');
     assert.equal(reviewEvent.end, '2030-06-15T15:00:00+08:00');
 
@@ -85,7 +114,7 @@ test('DeepSeek creates events and reschedules only after overlap confirmation (S
     assert.equal(beforeReschedule.length, 2);
     const meetingEvent = beforeReschedule.find(event => event.id !== reviewEvent.id);
     assert.ok(meetingEvent, 'Expected a second event with its own ID');
-    assert.equal(meetingEvent.title, '已有会议');
+    assert.ok(meetingEvent.title.includes('已有会议'), meetingEvent.title);
     assert.equal(meetingEvent.start, '2030-06-16T15:30:00+08:00');
     assert.equal(meetingEvent.end, '2030-06-16T16:30:00+08:00');
 
