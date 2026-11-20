@@ -35,7 +35,7 @@ export function setupLayout(resizeCalendar: () => void) {
       if (active) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
     }
-    document.title = (notes ? '笔记与数据' : '对话') + ' · Pi Durable';
+    document.title = (notes ? '笔记与数据' : '对话') + ' · Personal Agent';
     if (!notes && pendingAutoScroll) requestAnimationFrame(scrollToLatestMessage);
   }
 

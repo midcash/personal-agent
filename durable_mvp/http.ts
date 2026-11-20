@@ -7,12 +7,13 @@ import {Timer} from './agent.ts';
 import {Calendar, inRange} from './calendar.ts';
 import {Notebook, Requests, Timers} from './documents.ts';
 
+const repoRoot = path.resolve(import.meta.dirname, '..');
 const assets = new Map([
-  ['/style.css', 'style.css'],
-  ['/fullcalendar.js', 'node_modules/fullcalendar/index.global.min.js'],
-  ['/calendar-zh-cn.js', 'node_modules/@fullcalendar/core/locales/zh-cn.global.min.js'],
-  ['/luxon.js', 'node_modules/luxon/build/global/luxon.min.js'],
-  ['/calendar-zone.js', 'node_modules/@fullcalendar/luxon3/index.global.min.js'],
+  ['/style.css', path.join(import.meta.dirname, 'style.css')],
+  ['/fullcalendar.js', path.join(repoRoot, 'node_modules/fullcalendar/index.global.min.js')],
+  ['/calendar-zh-cn.js', path.join(repoRoot, 'node_modules/@fullcalendar/core/locales/zh-cn.global.min.js')],
+  ['/luxon.js', path.join(repoRoot, 'node_modules/luxon/build/global/luxon.min.js')],
+  ['/calendar-zone.js', path.join(repoRoot, 'node_modules/@fullcalendar/luxon3/index.global.min.js')],
 ]);
 
 interface HostMetadata {
@@ -60,9 +61,11 @@ export function createHttpServer(harness: Harness, root: Conversation, metadata:
           'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"});
         return res.end(html);
       }
-      const asset = /^\/web\/[a-z-]+\.js$/.test(url) ? 'dist' + url : assets.get(url);
+      const asset = /^\/web\/[a-z-]+\.js$/.test(url)
+        ? path.join(import.meta.dirname, 'dist', url)
+        : assets.get(url);
       if (req.method === 'GET' && asset) {
-        const content = fs.readFileSync(path.join(import.meta.dirname, asset));
+        const content = fs.readFileSync(asset);
         res.writeHead(200, {'Content-Type': url.endsWith('.js') ? 'text/javascript' : 'text/css',
           'Cache-Control': 'no-store'});
         return res.end(content);

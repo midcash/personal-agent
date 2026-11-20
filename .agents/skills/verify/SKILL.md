@@ -15,9 +15,9 @@ description: 验证本项目的实现和验证流程变更，按 diff 选择单�
 | 影响真实对话的提示词、模型接入、自然语言意图或参数映射、工具选择或组合，以及确认后的对话行为 | 将受影响的自然语言场景纳入 Agent 验收，按[真实模型浏览器验收](../../../verification/durable-mvp/README.md#真实模型浏览器验收)执行。 |
 | 验证规则或脚本 | 按下方「验证规则变更」执行。 |
 
-先跑针对性检查，再用仓库虚拟环境运行 `python scripts/check.py`。失败时先定位原因，修复后重跑失败项和受影响场景。保留失败输出，避免用反复重试掩盖不稳定检查。
+先跑针对性检查，再运行 `npm run check`。失败时先定位原因，修复后重跑失败项和受影响场景。保留失败输出，避免用反复重试掩盖不稳定检查。
 
-`python scripts/check.py` 和默认 CI 使用离线模型。必需的真实模型场景若缺少授权、密钥或环境，在交付中标明场景和阻塞原因，完整 Agent 验收待补。
+`npm run check` 和默认 CI 使用离线模型。必需的真实模型场景若缺少授权、密钥或环境，在交付中标明场景和阻塞原因，完整 Agent 验收待补。
 
 ## 验证规则变更
 
@@ -25,9 +25,9 @@ description: 验证本项目的实现和验证流程变更，按 diff 选择单�
 
 ## 单元测试模板
 
-正式回归测试沿用现有 Python `unittest` 框架和目录，由 `scripts/check.py` 发现执行；调用 Node 的写法可参考 `verification/durable-mvp/test_current_time.py`。每个用例写明**规则来源、固定输入、实际调用和预期**。直接写出期望值，按规则选正常、边界和拒绝用例。拒绝输入涉及写入时，再用进程测试断言状态未变。
+正式回归测试使用 Node 原生 `node:test`（位于 `tests/*.test.ts` 与 `verification/durable-mvp/*.test.ts`），由 `scripts/check.ts` 发现执行；进程与纯函数写法可参考 `verification/durable-mvp/current-time.test.ts`。每个用例写明**规则来源、固定输入、实际调用和预期**。直接写出期望值，按规则选正常、边界和拒绝用例。拒绝输入涉及写入时，再用进程测试断言状态未变。
 
-以下是 `CONTEXT.md` 中「日程重叠」的一次性演示，可在仓库根目录通过 `node --input-type=module` 从标准输入运行。该 `node:test` 示例用于演示断言与反例验证，不属于 `scripts/check.py` 的检查流程。
+以下是 `CONTEXT.md` 中「日程重叠」的一次性演示，可在仓库根目录通过 `node --input-type=module` 从标准输入运行。该 `node:test` 示例用于演示断言与反例验证，不属于 `scripts/check.ts` 的检查流程。
 
 ```js
 import assert from 'node:assert/strict';

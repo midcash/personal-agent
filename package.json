@@ -1,11 +1,14 @@
 {
-  "name": "pi-durable-mvp",
+  "name": "personal-agent",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.web.json",
-    "check": "tsc -p tsconfig.json && npm run build",
-    "start": "node server.ts"
+    "build": "tsc -p durable_mvp/tsconfig.web.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p durable_mvp/tsconfig.web.json --noEmit",
+    "test": "node --test \"tests/*.test.ts\" \"verification/durable-mvp/*.test.ts\"",
+    "check": "node scripts/check.ts",
+    "start": "node durable_mvp/server.ts"
   },
   "engines": {
     "node": ">=22.19.0"

@@ -13,6 +13,9 @@
     ]
   },
   "include": [
-    "*.ts"
+    "durable_mvp/*.ts",
+    "scripts/*.ts",
+    "tests/*.ts",
+    "verification/durable-mvp/*.ts"
   ]
 }
