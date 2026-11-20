@@ -16,22 +16,33 @@ export interface HostOptions {
 
 /** Parse and validate server CLI flags without touching the environment. */
 export function parseHostOptions(argv: readonly string[] = process.argv.slice(2)): HostOptions {
-  const {values} = parseArgs({
-    args: [...argv],
-    options: {
-      mode: {type: 'string', default: 'offline'},
-      data: {type: 'string'},
-      port: {type: 'string', default: '8765'},
-      'now-file': {type: 'string'},
-    },
-  });
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args: [...argv],
+      options: {
+        mode: {type: 'string', default: 'offline'},
+        data: {type: 'string'},
+        port: {type: 'string', default: '8765'},
+        'now-file': {type: 'string'},
+      },
+    });
+  } catch (error) {
+    // parseArgs rejects dash-prefixed separate values before returning values.port.
+    if (error instanceof Error && 'code' in error && error.code === 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE' &&
+      error.message.startsWith("Option '--port' argument is ambiguous.")) {
+      throw new Error('Invalid port');
+    }
+    throw error;
+  }
+  const {values} = parsed;
   if (values.mode !== 'offline' && values.mode !== 'deepseek') {
     throw new Error('mode must be offline or deepseek');
   }
+  if (!/^\d+$/.test(values.port)) throw new Error('Invalid port');
   const port = Number(values.port);
-  if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    throw new Error('Invalid port');
-  }
+  if (port > 65535) throw new Error('Invalid port');
+  if (values.data !== undefined && !values.data.trim()) throw new Error('Invalid data directory');
   return {mode: values.mode, data: values.data, port, nowFile: values['now-file']};
 }
 

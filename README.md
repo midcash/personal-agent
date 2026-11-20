@@ -16,7 +16,7 @@ npm.cmd run build
 npm.cmd start
 ```
 
-打开 [能力实验室](http://127.0.0.1:8765)。输入普通消息观察离线回显；`/note 一条笔记` 保存笔记，`/slow 一段内容` 执行十秒工具，`/fail` 演示工具失败。页面可创建十秒后台计时。刷新不会提交新消息；关闭服务后用相同命令重启，会话、笔记和后台任务继续保留。停止服务请在运行命令的终端按 Ctrl+C；若强杀 Node 进程并随后报 `Store is already in use`，结束占用该目录锁的 `node` 进程后即可重启。
+打开 [能力实验室](http://127.0.0.1:8765)。输入普通消息观察离线回显；`/note 一条笔记` 保存笔记，`/slow 一段内容` 执行十秒工具，`/fail` 演示工具失败。页面可创建十秒后台计时。刷新不会提交新消息；关闭服务后用相同命令重启，会话、笔记和后台任务继续保留。停止服务请在运行命令的终端按 Ctrl+C；若启动时报错 `Store is already in use`，说明仍有其他存活的 `node` 进程占用该数据目录，结束对应进程后即可重启。
 
 默认数据位于新的 `.durable-mvp/offline/`，不读取或迁移旧数据库。可直接运行服务端指定独立的新目录和端口：
 
@@ -51,7 +51,13 @@ node durable_mvp/server.ts --mode deepseek
 
 仅真实模式由 [环境加载器](durable_mvp/env.ts) 加载 `.env`；离线模式不加载。真实模式用自然语言要求保存笔记、安排日程等。锁定版 pi-ai 默认模型为 `deepseek-flash`，还支持其目录中的 `deepseek-v4-pro`。旧配置若为 `deepseek-v4-flash`，需由用户更新；启动错误会列出支持的模型，不自动猜别名或价格。自定义地址仍由 pi-ai 传输和认证。真实模式使用单独的新目录 `.durable-mvp/deepseek/`。
 
-重启会自动恢复未完成任务，模型请求可能重新发出并产生费用。页面调用数只统计本进程，不是跨重启账单。本轮未执行真实模型调用。
+重启会自动恢复未完成任务，模型请求可能重新发出并产生费用。页面调用数只统计本进程，不是跨重启账单。本机若需复跑有界真实模型验证（仅在新建临时 `--data` 目录运行，不触碰 `.durable-mvp/deepseek/`），可执行：
+
+```powershell
+npm.cmd run check:real
+```
+
+详细浏览器验收流程见 [真实模型浏览器验收](verification/durable-mvp/README.md#真实模型浏览器验收)。
 
 ## 源码与能力边界
 
@@ -59,7 +65,7 @@ node durable_mvp/server.ts --mode deepseek
 - [Agent](durable_mvp/agent.ts) 定义提示、工具和后台任务，[模型](durable_mvp/models.ts) 选择真实或离线模型，[文档](durable_mvp/documents.ts) 定义持久化记录。
 - [日历](durable_mvp/calendar.ts) 实现查询、变更、重叠确认和事务去重，[时间](durable_mvp/calendar-time.ts) 负责时区、时钟和相对日期解析。
 - [页面](durable_mvp/index.html)、[交互](durable_mvp/web/app.ts)、[样式](durable_mvp/style.css) 源码位于同一目录。Node 22 直接运行服务端 TypeScript，浏览器使用 npm 构建出的原生 ES 模块。修改浏览器代码后重新运行 `npm.cmd run build`。
-- [检查脚本](scripts/check.ts) 运行文档引用校验、TypeScript 类型检查/构建与全部 `node --test` 用例。
+- [检查脚本](scripts/check.ts) 运行文档引用校验、TypeScript 类型检查/构建与全部 `node --test` 用例；[真实模型检查](verification/durable-mvp/real-model.check.ts) 提供按需触发的有界 DeepSeek S01/S04/S05 验收入口。
 - [本轮验收](verification/durable-mvp/README.md)：运行方式、断言和浏览器观察。
 - [底层 Durable 探针](verification/durable-step0/README.md)：原子性、存储失败和已提交状态等历史隔离验证（需 Python 3.11+ 按其 README 单独运行）。
 

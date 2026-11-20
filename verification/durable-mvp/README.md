@@ -15,7 +15,10 @@
 
 ## 真实模型浏览器验收
 
-按根 [README](../../README.md#真实模型主动选择可能产生费用) 配置真实模型。执行前说明模型、场景、预计调用范围和费用，取得用户明确授权后，用 `--mode deepseek --data <全新临时目录> --port <空闲端口>` 启动。用 Ego Lite 确认页面显示真实模式，只发送本轮构造的测试数据。演练结束后停止本轮服务。
+按根 [README](../../README.md#真实模型主动选择可能产生费用) 配置真实模型。触及提示词、模型接入、工具或用户对话路径时，按 `AGENTS.md` 常驻授权使用本机 `.env` 与全新临时 `--data` 目录复跑有界验证（不得触碰用户 `.durable-mvp/deepseek/`；批量或高成本调用仍须先确认）。
+
+- CLI 端到端检查：在仓库根目录运行 `npm.cmd run check:real`（对应 [real-model.check.ts](real-model.check.ts)，自动覆盖下方 S01/S04/S05 自然语言改期链路）。
+- 浏览器实机检查：用 `node durable_mvp/server.ts --mode deepseek --data <全新临时目录> --port <空闲端口>` 启动，在 Ego Lite 确认页面显示真实模式，只发送本轮构造的测试数据，演练结束后停止服务并清理临时目录。
 
 以下是 [S05](../../docs/product-behavior.md#s05-会话修改删除与改期) 的自然语言改期示例。按改动范围选择场景。
 

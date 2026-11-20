@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {describe, test} from 'node:test';
+import {pathToFileURL} from 'node:url';
 import {loadEnv, parseHostOptions} from '../durable_mvp/env.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -52,11 +53,23 @@ describe('parseHostOptions', () => {
     assert.equal(parseHostOptions(['--mode=deepseek', '--mode=offline']).mode, 'offline');
   });
 
-  test('rejects case-mismatched mode, dangling mode flag, and invalid ports', () => {
+  test('rejects case-mismatched mode, dangling mode flag, invalid ports, and empty data path', () => {
     assert.throws(() => parseHostOptions(['--mode', 'DeepSeek']), /mode must be offline or deepseek/);
     assert.throws(() => parseHostOptions(['--mode']), /Option '--mode <value>' argument missing/);
-    assert.throws(() => parseHostOptions(['--port', '70000']), /Invalid port/);
-    assert.throws(() => parseHostOptions(['--port', 'abc']), /Invalid port/);
+    for (const badPort of [
+      ['--port', '70000'],
+      ['--port', 'abc'],
+      ['--port', ''],
+      ['--port', '   '],
+      ['--port', '0x10'],
+      ['--port', '-1'],
+      ['--port=-1'],
+    ]) {
+      assert.throws(() => parseHostOptions(badPort), /Invalid port/);
+    }
+    for (const badData of [['--data', ''], ['--data', '   ']]) {
+      assert.throws(() => parseHostOptions(badData), /Invalid data directory/);
+    }
   });
 });
 
@@ -106,7 +119,7 @@ describe('loadEnv', () => {
 });
 
 describe('server .env loading boundary', () => {
-  test('deepseek mode loads .env from working directory while offline mode skips it', async () => {
+  test('deepseek mode reads .env from working directory while offline mode skips it completely', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'server-env-'));
     try {
       fs.writeFileSync(
@@ -114,6 +127,30 @@ describe('server .env loading boundary', () => {
         'DEEPSEEK_API_KEY=sk-synthetic-test\nDEEPSEEK_MODEL=invalid-test-model\n',
         'utf8',
       );
+      const preloadPath = path.join(dir, 'preload.mjs');
+      fs.writeFileSync(
+        preloadPath,
+        [
+          "import fs from 'node:fs';",
+          "import {syncBuiltinESMExports} from 'node:module';",
+          'const origRead = fs.readFileSync;',
+          'fs.readFileSync = function(target, ...rest) {',
+          "  if (String(target).endsWith('.env')) throw new Error('DOTENV_READ_INTERCEPTED');",
+          '  return origRead.call(this, target, ...rest);',
+          '};',
+          'syncBuiltinESMExports();',
+        ].join('\n'),
+        'utf8',
+      );
+      const preloadUrl = pathToFileURL(preloadPath).href;
+
+      const intercepted = spawnSync(
+        process.execPath,
+        ['--import', preloadUrl, SERVER_PATH, '--mode', 'deepseek', '--data', path.join(dir, 'hook-store'), '--port', '0'],
+        {cwd: dir, env: cleanEnv(), encoding: 'utf8'},
+      );
+      assert.notEqual(intercepted.status, 0);
+      assert.ok(intercepted.stderr.includes('DOTENV_READ_INTERCEPTED'), intercepted.stderr);
 
       const realMode = spawnSync(
         process.execPath,
@@ -129,7 +166,7 @@ describe('server .env loading boundary', () => {
 
       const proc = spawn(
         process.execPath,
-        [SERVER_PATH, '--mode', 'offline', '--data', path.join(dir, 'offline-store'), '--port', '0'],
+        ['--import', preloadUrl, SERVER_PATH, '--mode', 'offline', '--data', path.join(dir, 'offline-store'), '--port', '0'],
         {cwd: dir, env: cleanEnv(), stdio: ['ignore', 'pipe', 'pipe']},
       );
       const closed = new Promise<void>(resolve => proc.once('close', () => resolve()));
@@ -157,6 +194,7 @@ describe('server .env loading boundary', () => {
         await closed;
       }
       assert.ok(output.includes('DURABLE_MVP http://127.0.0.1:'), output);
+      assert.ok(!output.includes('DOTENV_READ_INTERCEPTED'), output);
     } finally {
       fs.rmSync(dir, {recursive: true, force: true});
     }

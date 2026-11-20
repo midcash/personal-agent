@@ -8,6 +8,7 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p durable_mvp/tsconfig.web.json --noEmit",
     "test": "node --test \"tests/*.test.ts\" \"verification/durable-mvp/*.test.ts\"",
     "check": "node scripts/check.ts",
+    "check:real": "node --test verification/durable-mvp/real-model.check.ts",
     "start": "node durable_mvp/server.ts"
   },
   "engines": {

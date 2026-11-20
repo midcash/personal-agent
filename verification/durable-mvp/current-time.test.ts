@@ -211,7 +211,7 @@ describe('current-time and relative dates', () => {
     assert.equal(result.today, result.now.slice(0, 10));
     assert.equal(result.tomorrow, addIsoDays(result.today, 1));
     assert.equal(result.dayAfterTomorrow, addIsoDays(result.today, 2));
-    assert.ok(['周日', '周一', '周二', '周三', '周四', '周五', '周六'].includes(result.weekday));
+    assert.equal(result.weekday, '周' + '日一二三四五六'[new Date(result.today + 'T00:00:00Z').getUTCDay()]);
   });
 
   test('resolveWhen pure calendar arithmetic and validation boundaries', () => {
