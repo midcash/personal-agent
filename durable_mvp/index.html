@@ -8,14 +8,32 @@
       <a class="nav-link active" id="nav-chat" href="#/chat" aria-label="对话" title="对话" aria-current="page"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4.5h12v9H8.5L4.5 16v-2.5H4z"/><path d="M7.5 8.5h5M7.5 11h3"/></svg><span>对话</span></a>
       <a class="nav-link" id="nav-notes" href="#/notes" aria-label="笔记与数据" title="笔记与数据"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3.5h8l2.5 2.5v10.5H5z"/><path d="M13 3.5V6h2.5M7.5 10h5M7.5 13h5"/></svg><span>笔记与数据</span></a>
     </nav>
-    <div class="rail-spacer"></div>
-    <div class="rail-card"><span class="eyebrow">运行模式</span><span id="mode" class="badge">连接中</span></div>
+    <section class="rail-sessions" aria-label="会话列表">
+      <div class="rail-sessions-header">
+        <span class="eyebrow">会话</span>
+        <button class="rail-new-button" id="new-conversation" type="button">+ 新对话</button>
+      </div>
+      <ul class="conversation-list" id="conversation-list"></ul>
+    </section>
+    <div class="rail-card">
+      <span class="eyebrow">运行模式</span>
+      <span id="mode" class="badge">连接中</span>
+      <label class="sr-only" for="model-select">切换模型</label>
+      <select id="model-select" class="model-select" hidden></select>
+    </div>
     <p class="rail-foot">能力实验室 · MVP</p>
   </aside>
 
   <main class="workspace">
     <section class="view chat-view" id="chat-view" aria-label="对话">
-      <header class="view-header"><div class="view-heading"><span class="eyebrow">Conversation</span><h1>对话</h1><p>以对话安排和查询日程，右侧同步展示结果。</p></div><button class="ghost-button" id="schedule-toggle" type="button" aria-controls="schedule-panel" aria-expanded="true">收起日程</button></header>
+      <header class="view-header">
+        <div class="view-heading"><span class="eyebrow">Conversation</span><h1>对话</h1><p>以对话安排和查询日程，右侧同步展示结果。</p></div>
+        <div class="chat-header-actions">
+          <select id="conversation-select" class="compact-select" aria-label="切换会话"></select>
+          <button class="ghost-button compact-new-chat" id="new-conversation-compact" type="button">+ 新对话</button>
+          <button class="ghost-button" id="schedule-toggle" type="button" aria-controls="schedule-panel" aria-expanded="true">收起日程</button>
+        </div>
+      </header>
       <div class="chat-scroll" id="chat-scroll">
         <div class="intro"><span class="eyebrow">从一次对话，走到重启之后</span><h2>让工作接着发生。</h2><p id="description">正在读取持久化会话。</p></div>
         <div id="messages" aria-live="polite"></div>
@@ -30,7 +48,7 @@
     <section class="view notes-view" id="notes-view" aria-label="笔记与数据" hidden>
       <header class="view-header"><div class="view-heading"><span class="eyebrow">Library</span><h1>笔记与数据</h1><p>持久化内容、后台任务与运行信息集中在这里。</p></div><button class="ghost-button" id="schedule-toggle-notes" type="button" aria-controls="schedule-panel" aria-expanded="true">收起日程</button></header>
       <div class="notes-scroll"><div class="notes-grid">
-        <section class="panel"><h2>持久化笔记</h2><p id="note" class="note-body">暂无笔记</p><p class="hint">由 save_note 工具写入，随会话保存。</p></section>
+        <section class="panel"><h2>持久化笔记</h2><p id="note" class="note-body">暂无笔记</p><p class="hint">由 save_note 工具写入，跨会话保存在本地业务库。</p></section>
         <section class="panel"><h2>后台计时</h2><p class="hint">创建十秒任务，在服务重启后继续。取消对话不会取消后台任务。</p><button id="timer">创建十秒计时</button><ul id="timers"></ul></section>
         <section class="panel"><h2>试试能力边界</h2>
           <dl>
@@ -47,7 +65,7 @@
           </dl>
           <p class="hint">以上命令仅适用于离线演示。真实模型模式请用自然语言。</p>
         </section>
-        <section class="panel meta"><h2>运行信息</h2><p id="identity"></p><p id="counts"></p><p class="hint">单用户、单会话。此 MVP 尚未连接 MCP。</p></section>
+        <section class="panel meta"><h2>运行信息</h2><p id="identity"></p><p id="counts"></p><p class="hint">单用户、多会话，日程与笔记独立保存于本机业务库。此 MVP 尚未连接 MCP。</p></section>
       </div></div>
     </section>
   </main>

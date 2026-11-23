@@ -54,6 +54,7 @@ npm.cmd run check
 - 只读轮询不产生调用；拒绝跨 Origin、错误 Content-Type 和空输入。带 `charset` 参数的 `application/json` 正常接受；超过 16 KB 的请求返回 413，未读 body 即拒绝的 413/415 会关闭连接。
 - 同一数据目录拒绝第二个宿主，不影响第一个；独占 SQLite 锁在强杀后由系统释放，各用例的强杀重启步骤覆盖该路径，不需要手工清理锁文件。锁库损坏等非争用错误按原始错误上报，不伪装成占用。
 - HTTP 分块在中文 UTF-8 字节内部断开时，笔记仍完整保存。
+- 业务存储与多会话扩展检查（`tests/personal-store.test.ts` 与 `verification/durable-mvp/mvp.test.ts`）：验证 `personal.sqlite` 开放表结构与索引、超过 200 条日程/200 次请求/4000 字笔记的读写、窗口裁剪、已完成计时自动裁剪不锁死、多会话隔离对话且共享日程与笔记（含跨会话确认重叠以及删除 `session.sqlite` 后业务数据存活），以及真实模式同目录启动/运行时换模并记录 `mvp.model-changed`（同时拒绝混用离线与真实模式）。
 
 ## 日历增量验收（2026-11-05）
 

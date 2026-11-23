@@ -46,6 +46,7 @@ const respondOffline: FauxResponseFactory = request => {
 export function configureModels(offline: boolean, event: (kind: 'model') => void) {
   const models = createModels();
   let model: ModelRef;
+  let availableModels: ModelRef[];
   if (offline) {
     const faux = fauxProvider();
     const base = faux.provider;
@@ -58,18 +59,25 @@ export function configureModels(offline: boolean, event: (kind: 'model') => void
       },
     });
     model = {provider: 'faux', modelId: 'faux-1'};
+    availableModels = [model];
   } else {
     const provider = deepseekProvider();
+    const knownModels = provider.getModels();
     const modelId = process.env.DEEPSEEK_MODEL || 'deepseek-flash';
-    const known = provider.getModels().find(candidate => candidate.id === modelId);
+    const known = knownModels.find(candidate => candidate.id === modelId);
     if (!known) throw new Error('DEEPSEEK_MODEL is not in the locked pi-ai catalog. Supported: ' +
-      provider.getModels().map(candidate => candidate.id).join(', '));
+      knownModels.map(candidate => candidate.id).join(', '));
     // Model transport, authentication and streaming remain entirely in pi-ai.
-    const configured = {...known, baseUrl: process.env.DEEPSEEK_BASE_URL || known.baseUrl};
-    models.setProvider({...provider, getModels: () => [configured]});
+    const baseUrlOverride = process.env.DEEPSEEK_BASE_URL;
+    const configured = knownModels.map(candidate => ({
+      ...candidate,
+      baseUrl: baseUrlOverride || candidate.baseUrl,
+    }));
+    models.setProvider({...provider, getModels: () => configured});
     model = {provider: 'deepseek', modelId};
+    availableModels = configured.map(candidate => ({provider: 'deepseek', modelId: candidate.id}));
   }
   const stream = models.streamSimple.bind(models);
   models.streamSimple = (...args) => { event('model'); return stream(...args); };
-  return {models, model};
+  return {models, model, availableModels};
 }

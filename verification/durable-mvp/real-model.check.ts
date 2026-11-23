@@ -17,9 +17,14 @@ type StatePayload = Omit<State, 'calendar'> & {
   calendar: {events: CalendarEvent[]; pending: State['calendar']['pending']};
 };
 
-async function request(url: URL, signal: AbortSignal, prompt?: Prompt) {
+async function request(
+  url: URL,
+  signal: AbortSignal,
+  payload?: object,
+  expectedStatus = payload === undefined ? 200 : 202,
+) {
   const response = await new Promise<http.IncomingMessage>((resolve, reject) => {
-    const body = prompt === undefined ? undefined : JSON.stringify(prompt);
+    const body = payload === undefined ? undefined : JSON.stringify(payload);
     const req = http.request(url, {
       method: body === undefined ? 'GET' : 'POST',
       headers: body === undefined ? undefined : {'Content-Type': 'application/json'},
@@ -31,7 +36,7 @@ async function request(url: URL, signal: AbortSignal, prompt?: Prompt) {
   });
   let body = '';
   for await (const chunk of response.setEncoding('utf8')) body += chunk;
-  assert.equal(response.statusCode, prompt === undefined ? 200 : 202, `${url.pathname} returned ${response.statusCode}: ${body}`);
+  assert.equal(response.statusCode, expectedStatus, `${url.pathname} returned ${response.statusCode}: ${body}`);
   return body;
 }
 
@@ -142,6 +147,17 @@ test('DeepSeek creates events and reschedules only after overlap confirmation (S
     assert.equal(updated.start, start);
     assert.equal(updated.end, end);
     assert.deepEqual(state.calendar.events.find(event => event.id === meetingEvent.id), meetingEvent);
+
+    // Zero-cost cross-conversation check: new conversation starts with empty transcript and shares saved calendar events.
+    const checkSignal = AbortSignal.any([signal, budgetController.signal, AbortSignal.timeout(20_000)]);
+    const createdConvRaw = await request(new URL('/conversations', url), checkSignal, {title: '跨会话检查'}, 201);
+    const createdConv = JSON.parse(createdConvRaw) as {id: number};
+    const otherState = JSON.parse(
+      await request(new URL(`/state?conversationId=${createdConv.id}`, url), checkSignal),
+    ) as StatePayload;
+    assert.equal(otherState.conversationId, createdConv.id);
+    assert.deepEqual(otherState.messages, []);
+    assert.deepEqual(otherState.calendar.events, state.calendar.events);
 
     const {mode, model, counts} = state;
     console.log(JSON.stringify({mode, model, counts}));

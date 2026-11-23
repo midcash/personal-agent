@@ -26,7 +26,7 @@ node durable_mvp/server.ts --data C:/path/to/new-mvp-store --port 8765
 
 ### 日历视图与工具
 
-项目统一采用固定 UTC+8（IANA `Etc/GMT-8`，+08:00，不随夏令时变化）：页面显示时区、日历工具默认时区、模型提示与离线示例一致。页面使用本地安装的 FullCalendar 6.1.20（MIT），支持月、周、日视图；显式加载中文语言包。点击事件查看完整起止时间。五个原生工具为 `get_current_time`、`list_calendar_events`、`create_calendar_event`、`update_calendar_event` 和 `delete_calendar_event`，与页面 HTTP 查询共用 Durable 文档及 `session.sqlite`，不另建数据库、不迁移旧数据。
+项目统一采用固定 UTC+8（IANA `Etc/GMT-8`，+08:00，不随夏令时变化）：页面显示时区、日历工具默认时区、模型提示与离线示例一致。页面使用本地安装的 FullCalendar 6.1.20（MIT），支持月、周、日视图；显式加载中文语言包。点击事件查看完整起止时间。五个原生工具为 `get_current_time`、`list_calendar_events`、`create_calendar_event`、`update_calendar_event` 和 `delete_calendar_event`，与页面 HTTP 查询共用独立开放 schema 的业务数据库 `personal.sqlite`（跨会话共享日程与笔记，不绑死在单个 Pi Durable 会话文档中）。
 
 离线模式示例（仅合成模型指令，不代表自然语言理解）：
 
@@ -39,7 +39,7 @@ node durable_mvp/server.ts --data C:/path/to/new-mvp-store --port 8765
 
 离线可用 `/update {"eventId":"查询返回的 ID","title":"航班"}` 和 `/delete {"eventId":"查询返回的 ID"}` 验证工具；自然语言及多工具自主组合需使用真实模型，离线命令不代表语言理解验收。
 
-相同 HTTP 请求 ID 沿用现有提交去重；日程、创建工具 call ID 对应的结果和变更记录在同一 Durable 事务提交，恢复重放返回原结果。确认候选保存原日程 ID 和最终结果，重复确认也不会新增事件。新请求表达相同内容不会自动视为重复，而会走重叠确认。上限为 200 条已创建日程。
+相同 HTTP 请求 ID 沿用提交去重；日程、`calendar_operations` 工具幂等键（`conversationId:taskId:callId`）与待确认状态 `calendar_pending` 在 `personal.sqlite` 同一事务提交，恢复重放返回原结果。确认候选保存原日程 ID 和最终结果，重复确认也不会新增事件。新请求表达相同内容不会自动视为重复，而会走重叠确认。取消了原有的 200 条日程与 200 次请求硬上限，改用索引表与滑动窗口清理旧幂等记录（默认保留最近 2000 条请求去重、1000 条工具操作缓存、500 条已结束确认记录）。
 
 ### 真实模型（主动选择，可能产生费用）
 
@@ -49,7 +49,7 @@ node durable_mvp/server.ts --data C:/path/to/new-mvp-store --port 8765
 node durable_mvp/server.ts --mode deepseek
 ```
 
-仅真实模式由 [环境加载器](durable_mvp/env.ts) 加载 `.env`；离线模式不加载。真实模式用自然语言要求保存笔记、安排日程等。锁定版 pi-ai 默认模型为 `deepseek-flash`，还支持其目录中的 `deepseek-v4-pro`。旧配置若为 `deepseek-v4-flash`，需由用户更新；启动错误会列出支持的模型，不自动猜别名或价格。自定义地址仍由 pi-ai 传输和认证。真实模式使用单独的新目录 `.durable-mvp/deepseek/`。
+仅真实模式由 [环境加载器](durable_mvp/env.ts) 加载 `.env`；离线模式不加载。真实模式用自然语言要求保存笔记、安排日程等。锁定版 pi-ai 默认模型为 `deepseek-flash`，还支持其目录中的 `deepseek-v4-pro`。旧配置若为 `deepseek-v4-flash`，需由用户更新；启动错误会列出支持的模型，不自动猜别名或价格。自定义地址仍由 pi-ai 传输和认证。真实模式使用单独的新目录 `.durable-mvp/deepseek/`，并允许在同一目录内切换受支持的真实模型（通过更新 `DEEPSEEK_MODEL` 重启或页面即时切换），切换记录会显式写入对应会话记录；仍禁止在同一数据目录混用 `offline` 与 `deepseek` 模式。
 
 重启会自动恢复未完成任务，模型请求可能重新发出并产生费用。页面调用数只统计本进程，不是跨重启账单。本机若需复跑有界真实模型验证（仅在新建临时 `--data` 目录运行，不触碰 `.durable-mvp/deepseek/`），可执行：
 
@@ -62,7 +62,7 @@ npm.cmd run check:real
 ## 源码与能力边界
 
 - [宿主入口](durable_mvp/server.ts) 组装 Pi Durable、SQLite 和服务生命周期，[HTTP](durable_mvp/http.ts) 提供静态资源和应用接口，[环境加载](durable_mvp/env.ts) 负责白名单 `.env` 读取。
-- [Agent](durable_mvp/agent.ts) 定义提示、工具和后台任务，[模型](durable_mvp/models.ts) 选择真实或离线模型，[文档](durable_mvp/documents.ts) 定义持久化记录。
+- [Agent](durable_mvp/agent.ts) 定义提示、工具和后台任务，[模型](durable_mvp/models.ts) 选择真实或离线模型，[业务存储](durable_mvp/personal-store.ts) 维护独立开放 schema 的 `personal.sqlite`（日程、确认态、笔记与请求去重），[文档](durable_mvp/documents.ts) 定义运行时会话元信息与后台计时文档。
 - [日历](durable_mvp/calendar.ts) 实现查询、变更、重叠确认和事务去重，[时间](durable_mvp/calendar-time.ts) 负责时区、时钟和相对日期解析。
 - [页面](durable_mvp/index.html)、[交互](durable_mvp/web/app.ts)、[样式](durable_mvp/style.css) 源码位于同一目录。Node 22 直接运行服务端 TypeScript，浏览器使用 npm 构建出的原生 ES 模块。修改浏览器代码后重新运行 `npm.cmd run build`。
 - [检查脚本](scripts/check.ts) 运行文档引用校验、TypeScript 类型检查/构建与全部 `node --test` 用例；[真实模型检查](verification/durable-mvp/real-model.check.ts) 提供按需触发的有界 DeepSeek S01/S04/S05 验收入口。
@@ -71,9 +71,9 @@ npm.cmd run check:real
 
 模块划分参考 [OpenAI Agents SDK for TypeScript](https://github.com/openai/openai-agents-js/blob/main/CONTRIBUTING.md) 的运行时与模型适配边界，以及 [Mastra](https://github.com/mastra-ai/mastra/tree/main/packages/core/src) 的 Agent、工具与持久化职责划分。运行时仍由 Pi Durable 提供。
 
-Pi Durable、pi-ai 和 chord 精确锁定 1.4.0；Durable 是实验性 API。只支持单机、单用户、单会话、单进程，同一数据目录拒绝第二个宿主：宿主用独立 SQLite 锁库的独占事务声明占用，进程退出或被杀后由系统释放，不依赖 pid 文件，也不需要手工清理。MVP 上限为 200 个请求 ID、20 个后台计时。框架负责请求去重，应用持久化 ID 与正文绑定，拒绝同 ID 不同正文。浏览器对未确认提交保留原 ID，可以显式重试。
+Pi Durable、pi-ai 和 chord 精确锁定 1.4.0；Durable 是实验性 API。只支持单机、单用户、单进程，支持新建与切换多个独立会话，所有会话共享同一本机 `personal.sqlite` 个人日程与笔记库；同一数据目录拒绝第二个宿主：宿主用独立 SQLite 锁库的独占事务声明占用，进程退出或被杀后由系统释放，不依赖 pid 文件，也不需要手工清理。并发未到期后台计时上限为 20 个（已到期记录自动滚动裁剪，不再永久顶满）。应用在 `personal.sqlite` 中按 `(conversation_id, request_id)` 滑动窗口做请求去重，拒绝同 ID 不同正文；浏览器对未确认提交保留原 ID，可以显式重试。
 
-`save_note` 通过框架事务同时写笔记和变更记录，用工具 call ID 防止恢复时重复写入。`slow_echo` 声明可安全重放，强杀后可能重新执行。取消本轮中止普通工具，保留后台计时。停机期间计时任务不会执行，重启后补做已到期任务。安全重放不等于任意外部副作用恰好一次；未来 MCP 工具需要逐个决定重放策略。
+`save_note` 与日历工具在 `personal.sqlite` 中使用工具调用幂等键（`conversationId:taskId:callId`）防止恢复重放时重复写入；笔记正文不再受 4000 字硬上限限制，注入提示词时自动截断预览至 4000 字。`slow_echo` 声明可安全重放，强杀后可能重新执行。取消本轮中止当前会话的普通工具，保留后台计时。停机期间计时任务不会执行，重启后补做已到期任务。安全重放不等于任意外部副作用恰好一次；未来 MCP 工具需要逐个决定重放策略。
 
 不包含多用户、生产级运行预算、备份、数据库迁移或 MCP。
 

@@ -1,9 +1,19 @@
 import {setTimeout as delay} from 'node:timers/promises';
 import {Type} from '@earendil-works/pi-ai';
-import {defineExtension, defineTool, defineTask, section, type ConversationId} from '@earendil-works/pi-durable';
+import {
+  defineExtension,
+  defineTool,
+  defineTask,
+  section,
+  type AgentChange,
+  type ConversationId,
+  type Extension,
+  type ModelRef,
+} from '@earendil-works/pi-durable';
 import {calendarTools} from './calendar.ts';
 import {DEFAULT_TIME_ZONE, nowInDefaultZone} from './calendar-time.ts';
-import {Changed, Fired, Notebook} from './documents.ts';
+import {Fired} from './documents.ts';
+import type {PersonalStore} from './personal-store.ts';
 
 type TimerInput = {until: number; conversationId: ConversationId};
 type TimerPhase = {phase: 'arm'} | {phase: 'fire'};
@@ -25,20 +35,22 @@ export const Timer = defineTask<TimerInput, TimerPhase, string>({
 
 export const instructions = '你是个人日程能力验证助手。用中文回答。支持读取、新增、修改、改期和删除单次定时日程。修改或删除前先查询并使用已有日程 ID，匹配不唯一先追问；修改保留未指定字段，改期保留时长，优先直接修改而非先删后建。新增信息不足先追问，不擅自补全时间或时长。重叠必须寻求用户确认，提示使用页面确认按钮。只声称工具已成功执行的结果。不支持重复日程或提醒。';
 
-export function createAgentExtension(event: (kind: 'tool') => void) {
+export function defaultConversationAgent(model: ModelRef, extension: Extension): AgentChange {
+  return {model, extensions: [extension], thinkingLevel: 'off', instructions};
+}
+
+const NOTEBOOK_PROMPT_LIMIT = 4000;
+
+export function createAgentExtension(event: (kind: 'tool') => void, store?: PersonalStore) {
   const saveNote = defineTool({
     name: 'save_note',
     description: 'Replace the persistent notebook with the requested text.',
-    parameters: Type.Object({text: Type.String({maxLength: 4000})}),
+    parameters: Type.Object({text: Type.String()}),
     replay: 'safe',
-    execute: async ({text}, api, context) => {
+    execute: async ({text}, api) => {
       event('tool');
-      await api.commit(async tx => {
-        const note = await tx.doc(Notebook, api.conversationId);
-        if (note.callId === api.callId) return;
-        Object.assign(note, {text, callId: api.callId});
-        await tx.appendEntry(Changed, api.conversationId, {data: {text}});
-      }, context);
+      if (!store) throw new Error('PersonalStore is not configured');
+      store.saveNote(text, `${api.conversationId}:${api.taskId}:${api.callId}`);
       return {output: [{type: 'text', text: '笔记已保存：' + text}]};
     },
   });
@@ -66,11 +78,14 @@ export function createAgentExtension(event: (kind: 'tool') => void) {
   return defineExtension({
     name: 'mvp',
     tasks: [Timer],
-    tools: [saveNote, slowEcho, failDemo, ...calendarTools(event)],
+    tools: [saveNote, slowEcho, failDemo, ...calendarTools(event, store)],
     sections: [
-      section('notebook', async (input, context) => {
-        const note = await input.read.snapshot(Notebook, input.conversationId, context);
-        return 'Current notebook: ' + JSON.stringify(note?.text ?? '');
+      section('notebook', () => {
+        const text = store?.getNote() ?? '';
+        const preview = text.length > NOTEBOOK_PROMPT_LIMIT
+          ? text.slice(0, NOTEBOOK_PROMPT_LIMIT) + '…（已截断，完整内容保存在本地笔记库）'
+          : text;
+        return 'Current notebook: ' + JSON.stringify(preview);
       }),
       section('calendar-clock', async () =>
         `Current time (UTC+8): ${nowInDefaultZone()}. ` +

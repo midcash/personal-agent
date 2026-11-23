@@ -8,11 +8,13 @@ import path from 'node:path';
 import {afterEach, beforeEach, describe, test} from 'node:test';
 import {setTimeout as delay} from 'node:timers/promises';
 import {BACKGROUND_CONTEXT as ctx} from '@earendil-works/chord/context';
-import {Harness, createRegistry, defineExtension} from '@earendil-works/pi-durable';
+import {Harness, createRegistry, defineExtension, type TaskId} from '@earendil-works/pi-durable';
 import {createModels} from '@earendil-works/pi-ai/models';
 import {openNodeSqliteStorage} from '@earendil-works/pi-durable/storage/sqlite/node';
-import {Calendar} from '../../durable_mvp/calendar.ts';
+import {Timer} from '../../durable_mvp/agent.ts';
 import {DEFAULT_TIME_ZONE, nowInDefaultZone} from '../../durable_mvp/calendar-time.ts';
+import {SessionTimers} from '../../durable_mvp/documents.ts';
+import {openPersonalStore} from '../../durable_mvp/personal-store.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '../..');
 const ENV_ALLOWLIST = new Set([
@@ -36,11 +38,16 @@ interface CalendarEvent {
 }
 
 interface Message {
-  id: string;
-  role: 'user' | 'assistant' | 'toolResult';
+  id: number | string;
+  role: 'user' | 'assistant' | 'toolResult' | 'system';
+  kind?: string;
   text: string;
   calls: string[];
   error: boolean;
+  model?: string;
+  from?: {provider: string; modelId: string} | null;
+  to?: {provider: string; modelId: string};
+  reason?: 'startup' | 'user';
 }
 
 interface PendingEntry {
@@ -52,8 +59,11 @@ interface PendingEntry {
 }
 
 interface StatePayload {
-  conversationId: string;
+  conversationId: number;
   mode: string;
+  model: {provider: string; modelId: string};
+  availableModels: {provider: string; modelId: string}[];
+  conversations: {id: number; title: string; model?: {provider: string; modelId: string}; busy: boolean; createdAt: string}[];
   messages: Message[];
   note: string;
   timers: {id: string; until: number; state?: {status: string; outcome?: {status: string}}}[];
@@ -103,11 +113,14 @@ class Host {
     this.closePromise = closePromise;
   }
 
-  static async start(folder: string): Promise<Host> {
+  static async start(
+    folder: string,
+    options: {args?: readonly string[]; env?: Record<string, string>} = {},
+  ): Promise<Host> {
     const proc = spawn(
       process.execPath,
-      [path.join(ROOT, 'durable_mvp/server.ts'), '--data', folder, '--port', '0'],
-      {cwd: ROOT, env: offlineEnv(), stdio: ['ignore', 'pipe', 'pipe']},
+      [path.join(ROOT, 'durable_mvp/server.ts'), '--data', folder, '--port', '0', ...(options.args ?? [])],
+      {cwd: ROOT, env: {...offlineEnv(), ...(options.env ?? {})}, stdio: ['ignore', 'pipe', 'pipe']},
     );
     const output: string[] = [];
     const closePromise = new Promise<void>(resolve => {
@@ -202,19 +215,25 @@ class Host {
   async wait(
     condition: (state: StatePayload) => boolean = state => !state.busy,
     timeoutMs = 20000,
+    conversationId?: number,
   ): Promise<StatePayload> {
+    const route = conversationId !== undefined ? `/state?conversationId=${conversationId}` : '/state';
     const deadline = Date.now() + timeoutMs;
     let lastState: StatePayload | undefined;
     while (Date.now() < deadline) {
-      lastState = await this.call<StatePayload>('/state');
+      lastState = await this.call<StatePayload>(route);
       if (condition(lastState)) return lastState;
       await delay(50);
     }
     throw new Error('State deadline: ' + JSON.stringify(lastState));
   }
 
-  prompt(text: string, requestId: string): Promise<{submissionId: string}> {
-    return this.call<{submissionId: string}>('/prompt', {text, requestId});
+  prompt(text: string, requestId: string, conversationId?: number): Promise<{submissionId: string; conversationId: number}> {
+    return this.call<{submissionId: string; conversationId: number}>('/prompt', {
+      text,
+      requestId,
+      ...(conversationId !== undefined ? {conversationId} : {}),
+    });
   }
 
   async kill(): Promise<void> {
@@ -265,25 +284,54 @@ async function accessInstructions(folder: string, seed?: string): Promise<string
   }
 }
 
-async function seedCalendarCapacity(folder: string): Promise<void> {
+async function seedOver200PersonalData(folder: string): Promise<void> {
+  const store = openPersonalStore(path.join(folder, 'personal.sqlite'));
+  try {
+    const baseMs = Date.parse('2026-12-01T00:00:00+08:00');
+    for (let index = 0; index < 250; index++) {
+      const startMs = baseMs + index * 2 * 3600 * 1000;
+      const endMs = startMs + 3600 * 1000;
+      const start = new Date(startMs + 8 * 3600 * 1000).toISOString().replace('.000Z', '+08:00');
+      const end = new Date(endMs + 8 * 3600 * 1000).toISOString().replace('.000Z', '+08:00');
+      store.runCalendarWrite({
+        updating: false,
+        input: {title: `历史日程-${index}`, start, end, timeZone: 'Etc/GMT-8'},
+        conversationId: 1,
+        taskId: index + 1,
+        callId: `seed-cal-${index}`,
+      });
+      store.beginPromptRequest(1, `seed-req-${index}`, `历史请求-${index}`);
+    }
+  } finally {
+    store.close();
+  }
+}
+
+async function seedSessionTimers(folder: string, count: number, completed: boolean): Promise<void> {
+  const registry = createRegistry();
+  registry.install(defineExtension({name: 'mvp', tasks: [Timer]}));
   const storage = await openNodeSqliteStorage(path.join(folder, 'session.sqlite'));
-  const harness = await Harness.open(
-    storage,
-    {models: createModels(), registry: createRegistry()},
-    ctx,
-  );
+  const harness = await Harness.open(storage, {models: createModels(), registry}, ctx);
   try {
     const root = await harness.root(ctx);
+    const createdIds: TaskId<string>[] = [];
     await root.commit(async tx => {
-      const doc = await tx.doc(Calendar, root.id);
-      doc.events = Array.from({length: 200}, (_, index) => ({
-        id: `fixture-${index}`,
-        title: '容量测试',
-        start: '2026-11-06T14:00:00+08:00',
-        end: '2026-11-06T15:00:00+08:00',
-        timeZone: 'Etc/GMT-8',
-      }));
+      const doc = await tx.doc(SessionTimers);
+      const until = completed ? Date.now() - 1000 : Date.now() + 600_000;
+      for (let i = 0; i < count; i++) {
+        const id = await tx.createTask(
+          Timer,
+          {until, conversationId: root.id},
+          {ownership: {kind: 'conversation'}, background: true},
+        );
+        doc.items.push({id, until});
+        createdIds.push(id);
+      }
     }, ctx);
+    if (completed) {
+      harness.resume();
+      await Promise.all(createdIds.map(id => harness.waitForTask(id, ctx)));
+    }
   } finally {
     await harness.close(ctx);
   }
@@ -683,24 +731,212 @@ describe('durable-mvp', () => {
     assert.equal(state.calendar.events.length, 3);
   });
 
-  test('calendar capacity does not create pending', async () => {
+  test('calendar, requests, and notes exceed legacy 200/4000 caps without limit errors', async () => {
     await host.kill();
-    await seedCalendarCapacity(tempDir);
+    await seedOver200PersonalData(tempDir);
     host = await Host.start(tempDir);
 
-    const state = await calendarPrompt(
+    const state251 = await calendarPrompt(
       {
-        title: '已满',
+        title: '第251条日程',
         start: '2026-11-06T14:00:00+08:00',
         end: '2026-11-06T15:00:00+08:00',
       },
-      'full',
+      'req-251',
     );
-    assert.equal(state.calendar.events.length, 200);
-    assert.deepEqual(state.calendar.pending, {});
-    const latest = lastToolResult(state);
-    assert.equal(latest.error, true);
-    assert.ok(latest.text.includes('200'));
+    assert.equal(state251.calendar.events.length, 251);
+    assert.equal(state251.calendar.events[250].title, '第251条日程');
+
+    // Overlap confirmation on #252 succeeds cleanly beyond 200 events and 200 requests.
+    const overlapState = await calendarPrompt(
+      {
+        title: '第252条重叠日程',
+        start: '2026-11-06T14:30:00+08:00',
+        end: '2026-11-06T15:30:00+08:00',
+      },
+      'req-252',
+    );
+    assert.equal(overlapState.calendar.events.length, 251);
+    const cid = Object.keys(overlapState.calendar.pending)[0];
+    assert.ok(cid);
+    await host.prompt('确认重叠 ' + cid, 'req-253');
+    const confirmed = await host.wait();
+    assert.equal(confirmed.calendar.events.length, 252);
+
+    // Note >4000 chars persisted intact via store/tool path without 4000-char cap.
+    const store = openPersonalStore(path.join(tempDir, 'personal.sqlite'));
+    try {
+      const longNote = '长笔记'.repeat(1600);
+      assert.ok(longNote.length > 4000);
+      store.saveNote(longNote, 'manual-long-note');
+    } finally {
+      store.close();
+    }
+    const afterNote = await host.wait();
+    assert.ok(afterNote.note.length > 4000);
+  });
+
+  test('multi-conversation isolates transcripts while sharing calendar and note, and survives session.sqlite deletion', async () => {
+    await host.prompt('/note 跨会话共享笔记', 'conv1-note');
+    await host.wait();
+    const conv1State = await calendarPrompt(
+      {
+        title: '跨会话会议',
+        start: '2026-11-06T15:00:00+08:00',
+        end: '2026-11-06T16:00:00+08:00',
+      },
+      'conv1-cal',
+    );
+    assert.equal(conv1State.conversations.length, 1);
+
+    const created = await host.call<{id: number; title: string}>('/conversations', {title: '第二个对话'});
+    assert.ok(created.id > conv1State.conversationId);
+
+    const conv2Initial = await host.wait(undefined, 20000, created.id);
+    assert.equal(conv2Initial.conversationId, created.id);
+    assert.deepEqual(conv2Initial.messages, []);
+    assert.equal(conv2Initial.note, '跨会话共享笔记');
+    assert.deepEqual(conv2Initial.calendar.events, conv1State.calendar.events);
+    assert.equal(conv2Initial.conversations.length, 2);
+
+    // Trigger overlap in conv 1, then confirm it from conv 2.
+    await host.prompt(
+      '/calendar ' +
+        JSON.stringify({
+          title: '跨会话确认日程',
+          start: '2026-11-06T15:30:00+08:00',
+          end: '2026-11-06T16:30:00+08:00',
+        }),
+      'conv1-overlap',
+      conv1State.conversationId,
+    );
+    const pendingState = await host.wait(undefined, 20000, conv1State.conversationId);
+    const cid = Object.keys(pendingState.calendar.pending)[0];
+    assert.ok(cid);
+
+    await host.prompt('确认重叠 ' + cid, 'conv2-confirm', created.id);
+    const conv2After = await host.wait(undefined, 20000, created.id);
+    assert.equal(conv2After.calendar.events.length, 2);
+    assert.ok(conv2After.messages.some(m => m.role === 'user' && m.text.includes('确认重叠')));
+
+    const conv1After = await host.wait(undefined, 20000, conv1State.conversationId);
+    assert.equal(conv1After.calendar.events.length, 2);
+    assert.ok(!conv1After.messages.some(m => m.text.includes('确认重叠')));
+
+    // Delete session.sqlite completely and restart; personal.sqlite preserves calendar and note.
+    await host.kill();
+    for (const suffix of ['', '-wal', '-shm']) {
+      fs.rmSync(path.join(tempDir, 'session.sqlite' + suffix), {force: true});
+    }
+    host = await Host.start(tempDir);
+    const rebuilt = await host.wait();
+    assert.deepEqual(rebuilt.messages, []);
+    assert.equal(rebuilt.note, '跨会话共享笔记');
+    assert.equal(rebuilt.calendar.events.length, 2);
+  });
+
+  test('real mode allows same-directory model switching with transcript record and rejects offline/real mix', async () => {
+    await host.kill();
+
+    const realDir = fs.mkdtempSync(path.join(os.tmpdir(), 'durable-mvp-model-switch-'));
+    try {
+      const baseEnv = {
+        DEEPSEEK_API_KEY: 'test-key-offline-only',
+        DEEPSEEK_BASE_URL: 'http://127.0.0.1:1',
+      };
+      // Mixing offline store in real mode must fail without corrupting data.
+      await assert.rejects(
+        () => Host.start(tempDir, {args: ['--mode', 'deepseek'], env: {...baseEnv, DEEPSEEK_MODEL: 'deepseek-flash'}}),
+        /Cannot mix offline and real-model mode/,
+      );
+
+      host = await Host.start(realDir, {
+        args: ['--mode', 'deepseek'],
+        env: {...baseEnv, DEEPSEEK_MODEL: 'deepseek-flash'},
+      });
+      const initial = await host.wait();
+      assert.equal(initial.mode, 'deepseek');
+      assert.equal(initial.model.modelId, 'deepseek-flash');
+      assert.ok(initial.availableModels.some(m => m.modelId === 'deepseek-v4-pro'));
+
+      const conv2 = await host.call<{id: number}>('/conversations', {title: '保持默认模型'});
+
+      // Runtime switch on conv 1 records mvp.model-changed without affecting conv 2.
+      const switchRes = await host.call<{conversationId: number; model: {modelId: string}; changed: boolean}>(
+        '/model',
+        {conversationId: initial.conversationId, modelId: 'deepseek-v4-pro'},
+      );
+      assert.equal(switchRes.changed, true);
+      assert.equal(switchRes.model.modelId, 'deepseek-v4-pro');
+
+      const conv1AfterSwitch = await host.wait(undefined, 20000, initial.conversationId);
+      assert.equal(conv1AfterSwitch.model.modelId, 'deepseek-v4-pro');
+      assert.ok(
+        conv1AfterSwitch.messages.some(
+          m => m.role === 'system' && m.kind === 'model-changed' && m.reason === 'user' && m.to?.modelId === 'deepseek-v4-pro',
+        ),
+      );
+      assert.equal((await host.wait(undefined, 20000, conv2.id)).model.modelId, 'deepseek-flash');
+
+      // Restarting with unchanged DEEPSEEK_MODEL preserves conv 1's user-chosen model.
+      await host.kill();
+      host = await Host.start(realDir, {
+        args: ['--mode', 'deepseek'],
+        env: {...baseEnv, DEEPSEEK_MODEL: 'deepseek-flash'},
+      });
+      assert.equal((await host.wait(undefined, 20000, initial.conversationId)).model.modelId, 'deepseek-v4-pro');
+      assert.equal((await host.wait(undefined, 20000, conv2.id)).model.modelId, 'deepseek-flash');
+
+      // Restarting with a new DEEPSEEK_MODEL syncs remaining conversations and appends startup model-changed entry.
+      await host.kill();
+      host = await Host.start(realDir, {
+        args: ['--mode', 'deepseek'],
+        env: {...baseEnv, DEEPSEEK_MODEL: 'deepseek-v4-pro'},
+      });
+      const conv2Synced = await host.wait(undefined, 20000, conv2.id);
+      assert.equal(conv2Synced.model.modelId, 'deepseek-v4-pro');
+      assert.ok(
+        conv2Synced.messages.some(
+          m => m.role === 'system' && m.kind === 'model-changed' && m.reason === 'startup' && m.to?.modelId === 'deepseek-v4-pro',
+        ),
+      );
+      // Opening real-mode directory in offline mode must still be rejected.
+      await host.kill();
+      await assert.rejects(() => Host.start(realDir), /Cannot mix offline and real-model mode/);
+    } finally {
+      await host.kill();
+      fs.rmSync(realDir, {recursive: true, force: true});
+    }
+
+    host = await Host.start(tempDir);
+  });
+
+  test('completed timers prune cleanly without permanent 20-timer lockup while capping concurrent live timers at 20', async () => {
+    await host.kill();
+    await seedSessionTimers(tempDir, 20, true);
+    host = await Host.start(tempDir);
+
+    const res21 = await host.call<{taskId: number}>('/timer', {});
+    assert.ok(res21.taskId > 0);
+    const after21 = await host.wait(state => state.timers.some(t => Number(t.id) === res21.taskId));
+    assert.ok(after21.timers.length <= 21);
+
+    // Concurrent live (sleeping) timers still cap at 20.
+    const liveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'durable-mvp-live-timers-'));
+    try {
+      await seedSessionTimers(liveDir, 20, false);
+      const liveHost = await Host.start(liveDir);
+      try {
+        await assert.rejects(
+          () => liveHost.call('/timer', {}),
+          err => err instanceof HttpError && err.status === 400 && err.body.includes('20'),
+        );
+      } finally {
+        await liveHost.kill();
+      }
+    } finally {
+      fs.rmSync(liveDir, {recursive: true, force: true});
+    }
   });
 
   test('interrupted safe tool resumes', async () => {
