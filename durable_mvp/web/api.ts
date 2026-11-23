@@ -11,16 +11,34 @@ export interface PendingEvent {
   result?: unknown;
 }
 
+export interface ModelRef {
+  modelId: string;
+  provider: string;
+}
+
+export interface ConversationSummary {
+  id: number;
+  title: string;
+  model?: ModelRef;
+  busy: boolean;
+  createdAt: string;
+}
+
 export interface Message {
-  role: 'user' | 'assistant' | 'toolResult';
+  id?: number;
+  role: 'user' | 'assistant' | 'toolResult' | 'system';
+  kind?: 'model-changed';
   text: string;
   calls: string[];
+  model?: string;
 }
 
 export interface State {
-  conversationId: string;
+  conversationId: number;
   mode: 'offline' | 'deepseek';
-  model: {modelId: string; provider: string};
+  model: ModelRef;
+  availableModels: ModelRef[];
+  conversations: ConversationSummary[];
   messages: Message[];
   note: string;
   timers: {until: number; state?: {status: string}}[];
@@ -32,6 +50,15 @@ export interface State {
 export interface Prompt {
   text: string;
   requestId: string;
+  conversationId?: number;
+}
+
+export class HttpStatusError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
 }
 
 async function request(url: string, body?: object): Promise<unknown> {
@@ -44,20 +71,36 @@ async function request(url: string, body?: object): Promise<unknown> {
   const result: unknown = await response.json();
   if (!response.ok) {
     const message = result && typeof result === 'object' && 'error' in result ? result.error : undefined;
-    throw new Error(typeof message === 'string' && message ? message : `HTTP ${response.status}`);
+    throw new HttpStatusError(response.status, typeof message === 'string' && message ? message : `HTTP ${response.status}`);
   }
   return result;
 }
 
-export async function loadState(): Promise<State> {
+export async function loadState(conversationId?: number): Promise<State> {
   // The same-origin server owns the response schema.
-  return await request('/state') as State;
+  const query = conversationId !== undefined ? `?conversationId=${encodeURIComponent(String(conversationId))}` : '';
+  return await request('/state' + query) as State;
 }
 
 export async function sendPrompt(prompt: Prompt): Promise<void> {
   await request('/prompt', prompt);
 }
 
-export async function sendAction(endpoint: '/abort' | '/timer'): Promise<void> {
-  await request(endpoint, {});
+export async function sendAction(endpoint: '/abort' | '/timer', conversationId?: number): Promise<void> {
+  await request(endpoint, endpoint === '/abort' && conversationId !== undefined ? {conversationId} : {});
+}
+
+export async function createConversation(title?: string): Promise<ConversationSummary> {
+  return await request('/conversations', title ? {title} : {}) as ConversationSummary;
+}
+
+export async function switchModel(
+  conversationId: number,
+  modelId: string,
+): Promise<{conversationId: number; model: ModelRef; changed: boolean}> {
+  return await request('/model', {conversationId, modelId}) as {
+    conversationId: number;
+    model: ModelRef;
+    changed: boolean;
+  };
 }

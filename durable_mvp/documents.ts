@@ -1,10 +1,28 @@
-import {defineDoc, defineEntry, type TaskId} from '@earendil-works/pi-durable';
+import {defineDoc, defineEntry, type ModelRef, type TaskId} from '@earendil-works/pi-durable';
 
-export const Notebook = defineDoc({kind: 'mvp.notebook', version: 1, scope: 'conversation',
-  history: 'rewindable', fork: 'asOf', initial: () => ({text: '', callId: ''}), checkpointWhen: () => false});
-export const Changed = defineEntry<{text: string}>('mvp.note-changed');
-export const Timers = defineDoc<{items: {id: TaskId<string>; until: number}[]}>({kind: 'mvp.timers', version: 1, scope: 'conversation',
-  history: 'rewindable', fork: 'asOf', initial: () => ({items: []}), checkpointWhen: () => false});
+export const SessionTimers = defineDoc<{items: {id: TaskId<string>; until: number}[]}>({
+  kind: 'mvp.session-timers',
+  version: 1,
+  scope: 'session',
+  initial: () => ({items: []}),
+  checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
+});
+
+export const ConversationMeta = defineDoc<{title: string; preview: string; createdAt: string}>({
+  kind: 'mvp.conversation-meta',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({title: '', preview: '', createdAt: ''}),
+  checkpointWhen: () => true,
+});
+
+export const ModelChanged = defineEntry<{
+  from: ModelRef | null;
+  to: ModelRef;
+  reason: 'startup' | 'user';
+  changedAt: string;
+}>('mvp.model-changed');
+
 export const Fired = defineEntry<{text: string; until: number}>('mvp.timer-fired');
-export const Requests = defineDoc<{items: Record<string, string>}>({kind: 'mvp.requests', version: 1, scope: 'conversation',
-  history: 'rewindable', fork: 'asOf', initial: () => ({items: {}}), checkpointWhen: () => false});

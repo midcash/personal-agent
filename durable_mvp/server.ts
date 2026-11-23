@@ -5,12 +5,93 @@ import {DatabaseSync} from 'node:sqlite';
 import {syncBuiltinESMExports} from 'node:module';
 import {BACKGROUND_CONTEXT as ctx} from '@earendil-works/chord/context';
 import {openNodeSqliteStorage} from '@earendil-works/pi-durable/storage/sqlite/node';
-import {Harness, createRegistry} from '@earendil-works/pi-durable';
-import {createAgentExtension, instructions} from './agent.ts';
-import {configureModels} from './models.ts';
-import {setNowProvider} from './calendar-time.ts';
+import {
+  configure,
+  createRegistry,
+  Harness,
+  type Conversation,
+  type ConversationId,
+  type Cursor,
+  type ModelRef,
+} from '@earendil-works/pi-durable';
+import {createAgentExtension, defaultConversationAgent, instructions} from './agent.ts';
+import {currentTimeMs, setNowProvider} from './calendar-time.ts';
+import {ModelChanged} from './documents.ts';
 import {loadEnv, parseHostOptions} from './env.ts';
 import {createHttpServer} from './http.ts';
+import {configureModels} from './models.ts';
+import {openPersonalStore, type PersonalStore} from './personal-store.ts';
+
+async function syncConversationsOnStartup(
+  harness: Harness,
+  personalStore: PersonalStore,
+  offline: boolean,
+  model: ModelRef,
+  availableModels: readonly ModelRef[],
+) {
+  const ownerlessIds: ConversationId[] = [];
+  await harness.commit(async tx => {
+    let cursor: Cursor | undefined;
+    while (true) {
+      const page = await tx.scanConversations({order: 'ascending'}, 200, cursor);
+      for (const rec of page.items) {
+        if (!rec.owner) ownerlessIds.push(rec.id);
+      }
+      if (!page.next) break;
+      cursor = page.next;
+    }
+  }, ctx);
+
+  const conversations: Conversation[] = [];
+  for (const id of ownerlessIds) {
+    const conv = await harness.conversation(id, ctx);
+    if (!conv) continue;
+    const existing = await conv.agent(ctx);
+    if (existing.model && (existing.model.provider === 'faux') !== offline) {
+      throw new Error('Cannot mix offline and real-model mode in the same --data directory; use a separate --data directory');
+    }
+    conversations.push(conv);
+  }
+
+  const startupKey = `${model.provider}/${model.modelId}`;
+  const lastStartupKey = personalStore.getMeta('last_startup_model');
+  const startupModelChanged = !offline && lastStartupKey !== undefined && lastStartupKey !== startupKey;
+  const isLegacyNoMeta = !offline && lastStartupKey === undefined;
+
+  for (const conv of conversations) {
+    const existing = await conv.agent(ctx);
+    const stored = existing.model;
+    const sameModel = stored?.provider === model.provider && stored?.modelId === model.modelId;
+    const storedStillSupported =
+      stored !== undefined &&
+      availableModels.some(candidate => candidate.provider === stored.provider && candidate.modelId === stored.modelId);
+    const shouldSyncModel = !offline && !sameModel && (startupModelChanged || isLegacyNoMeta || !storedStillSupported);
+    const shouldRefreshInstructions = existing.instructions !== instructions;
+
+    if (shouldSyncModel || shouldRefreshInstructions) {
+      await conv.commit(async tx => {
+        await configure(tx, conv.id, {
+          ...(shouldRefreshInstructions ? {instructions} : {}),
+          ...(shouldSyncModel ? {model} : {}),
+        });
+        if (shouldSyncModel) {
+          await tx.appendEntry(ModelChanged, conv.id, {
+            data: {
+              from: stored ?? null,
+              to: model,
+              reason: 'startup',
+              changedAt: new Date(currentTimeMs()).toISOString(),
+            },
+          });
+        }
+      }, ctx);
+    }
+  }
+
+  if (!offline) {
+    personalStore.setMeta('last_startup_model', startupKey);
+  }
+}
 
 const options = parseHostOptions();
 // Test-only: pin "now" from a file (or literal ISO string). Production never passes this flag.
@@ -31,6 +112,10 @@ if (offline) {
   net.Socket.prototype.connect = deny;
   syncBuiltinESMExports();
 }
+const counts = {model: 0, tool: 0};
+const event = (kind: keyof typeof counts) => { counts[kind]++; console.log(JSON.stringify({event: kind, count: counts[kind]})); };
+const {models, model, availableModels} = configureModels(offline, event);
+
 const folder = path.resolve(options.data ?? `.durable-mvp/${options.mode}`);
 fs.mkdirSync(folder, {recursive: true});
 // OS-level SQLite locking alone does not exclude two independent harness schedulers.
@@ -53,24 +138,37 @@ try {
   throw error;
 }
 
-const counts = {model: 0, tool: 0};
-const event = (kind: keyof typeof counts) => { counts[kind]++; console.log(JSON.stringify({event: kind, count: counts[kind]})); };
-const {models, model} = configureModels(offline, event);
-const extension = createAgentExtension(event);
+const personalStore = openPersonalStore(path.join(folder, 'personal.sqlite'), {now: currentTimeMs});
+const extension = createAgentExtension(event, personalStore);
 const registry = createRegistry();
 registry.install(extension);
 const storage = await openNodeSqliteStorage(path.join(folder, 'session.sqlite'));
-const harness = await Harness.open(storage, {models, registry,
+const harness = await Harness.open(storage, {
+  models,
+  registry,
   settings: {retry: {maxRetries: 0}, toolExecution: 'sequential'},
-  onReport: () => console.error('Durable reported a runtime error; inspect state before continuing.')}, ctx);
-const root = await harness.root(ctx, {agent: {model, extensions: [extension], thinkingLevel: 'off', instructions}});
-const existing = await root.agent(ctx);
-if (existing.model?.provider !== model.provider || existing.model?.modelId !== model.modelId)
-  throw new Error('Stored model differs; use a separate --data directory');
-// root() only applies defaults when creating a conversation. Refresh the app-owned
-// instructions before resuming existing sessions, without replacing their data.
-if (existing.instructions !== instructions) await root.configure({instructions}, ctx);
-const server = createHttpServer(harness, root, {mode: options.mode, model, counts});
+  onReport: () => console.error('Durable reported a runtime error; inspect state before continuing.'),
+}, ctx);
+
+let root: Conversation;
+try {
+  root = await harness.root(ctx, {agent: defaultConversationAgent(model, extension)});
+  await syncConversationsOnStartup(harness, personalStore, offline, model, availableModels);
+} catch (error) {
+  await harness.close(ctx).catch(() => {});
+  personalStore.close();
+  lockDb.close();
+  throw error;
+}
+
+const server = createHttpServer(harness, root, {
+  personalStore,
+  extension,
+  mode: options.mode,
+  model,
+  availableModels,
+  counts,
+});
 // Resuming unfinished model/tool tasks can repeat paid calls in real mode.
 harness.resume();
 server.listen(port, '127.0.0.1', () => {
@@ -80,6 +178,7 @@ server.listen(port, '127.0.0.1', () => {
 async function stop() {
   server.close();
   await harness.close(ctx);
+  personalStore.close();
   // Keep the lock connection reachable for the entire lifetime of the host.
   lockDb.close();
   process.exit(0);
